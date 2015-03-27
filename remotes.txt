@@ -1,0 +1,4 @@
+origin	git@github.com:skyportsystems/gopacket (fetch)
+origin	git@github.com:skyportsystems/gopacket (push)
+upstream	https://github.com/google/gopacket.git (fetch)
+upstream	https://github.com/google/gopacket.git (push)
