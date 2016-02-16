@@ -263,19 +263,20 @@ func layerString(i interface{}, anonymous bool, writeSpace bool) string {
 			b.WriteByte('{')
 		}
 		for i := 0; i < v.NumField(); i++ {
-			// Check if this is upper-case.
 			ftype := typ.Field(i)
-			f := v.Field(i)
+			if ftype.PkgPath != "" {
+				continue
+			}
 			if ftype.Anonymous {
-				anonStr := layerString(f.Interface(), true, writeSpace)
+				anonStr := layerString(v.Field(i).Interface(), true, writeSpace)
 				writeSpace = writeSpace || anonStr != ""
 				b.WriteString(anonStr)
-			} else if ftype.PkgPath == "" { // exported
+			} else {
 				if writeSpace {
 					b.WriteByte(' ')
 				}
 				writeSpace = true
-				fmt.Fprintf(&b, "%s=%s", typ.Field(i).Name, layerString(f.Interface(), false, writeSpace))
+				fmt.Fprintf(&b, "%s=%s", ftype.Name, layerString(v.Field(i).Interface(), false, writeSpace))
 			}
 		}
 		if !anonymous {
