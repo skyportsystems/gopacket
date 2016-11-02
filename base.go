@@ -33,13 +33,30 @@ type Layer interface {
 type Payload []byte
 
 // LayerType returns LayerTypePayload
-func (p *Payload) LayerType() LayerType     { return LayerTypePayload }
-func (p *Payload) LayerContents() []byte    { return []byte(*p) }
-func (p *Payload) LayerPayload() []byte     { return nil }
-func (p *Payload) Payload() []byte          { return []byte(*p) }
-func (p *Payload) String() string           { return fmt.Sprintf("%d byte(s)", len(*p)) }
-func (p *Payload) CanDecode() LayerClass    { return LayerTypePayload }
-func (p *Payload) NextLayerType() LayerType { return LayerTypeZero }
+func (p Payload) LayerType() LayerType { return LayerTypePayload }
+
+// LayerContents returns the bytes making up this layer.
+func (p Payload) LayerContents() []byte { return []byte(p) }
+
+// LayerPayload returns the payload within this layer.
+func (p Payload) LayerPayload() []byte { return nil }
+
+// Payload returns this layer as bytes.
+func (p Payload) Payload() []byte { return []byte(p) }
+
+// String implements fmt.Stringer.
+func (p Payload) String() string { return fmt.Sprintf("%d byte(s)", len(p)) }
+
+// GoString implements fmt.GoStringer.
+func (p Payload) GoString() string { return LongBytesGoString([]byte(p)) }
+
+// CanDecode implements DecodingLayer.
+func (p Payload) CanDecode() LayerClass { return LayerTypePayload }
+
+// NextLayerType implements DecodingLayer.
+func (p Payload) NextLayerType() LayerType { return LayerTypeZero }
+
+// DecodeFromBytes implements DecodingLayer.
 func (p *Payload) DecodeFromBytes(data []byte, df DecodeFeedback) error {
 	*p = Payload(data)
 	return nil
@@ -48,7 +65,61 @@ func (p *Payload) DecodeFromBytes(data []byte, df DecodeFeedback) error {
 // SerializeTo writes the serialized form of this layer into the
 // SerializationBuffer, implementing gopacket.SerializableLayer.
 // See the docs for gopacket.SerializableLayer for more info.
-func (p *Payload) SerializeTo(b SerializeBuffer, opts SerializeOptions) error {
+func (p Payload) SerializeTo(b SerializeBuffer, opts SerializeOptions) error {
+	bytes, err := b.PrependBytes(len(p))
+	if err != nil {
+		return err
+	}
+	copy(bytes, p)
+	return nil
+}
+
+// decodePayload decodes data by returning it all in a Payload layer.
+func decodePayload(data []byte, p PacketBuilder) error {
+	payload := &Payload{}
+	if err := payload.DecodeFromBytes(data, p); err != nil {
+		return nil
+	}
+	p.AddLayer(payload)
+	p.SetApplicationLayer(payload)
+	return nil
+}
+
+// Fragment is a Layer containing a fragment of a larger frame, used by layers
+// like IPv4 and IPv6 that allow for fragmentation of their payloads.
+type Fragment []byte
+
+// LayerType returns LayerTypeFragment
+func (p *Fragment) LayerType() LayerType { return LayerTypeFragment }
+
+// LayerContents implements Layer.
+func (p *Fragment) LayerContents() []byte { return []byte(*p) }
+
+// LayerPayload implements Layer.
+func (p *Fragment) LayerPayload() []byte { return nil }
+
+// Payload returns this layer as a byte slice.
+func (p *Fragment) Payload() []byte { return []byte(*p) }
+
+// String implements fmt.Stringer.
+func (p *Fragment) String() string { return fmt.Sprintf("%d byte(s)", len(*p)) }
+
+// CanDecode implements DecodingLayer.
+func (p *Fragment) CanDecode() LayerClass { return LayerTypeFragment }
+
+// NextLayerType implements DecodingLayer.
+func (p *Fragment) NextLayerType() LayerType { return LayerTypeZero }
+
+// DecodeFromBytes implements DecodingLayer.
+func (p *Fragment) DecodeFromBytes(data []byte, df DecodeFeedback) error {
+	*p = Fragment(data)
+	return nil
+}
+
+// SerializeTo writes the serialized form of this layer into the
+// SerializationBuffer, implementing gopacket.SerializableLayer.
+// See the docs for gopacket.SerializableLayer for more info.
+func (p *Fragment) SerializeTo(b SerializeBuffer, opts SerializeOptions) error {
 	bytes, err := b.PrependBytes(len(*p))
 	if err != nil {
 		return err
@@ -57,9 +128,9 @@ func (p *Payload) SerializeTo(b SerializeBuffer, opts SerializeOptions) error {
 	return nil
 }
 
-// decodePayload decodes data by returning it all in a Payload layer.
-func decodePayload(data []byte, p PacketBuilder) error {
-	payload := &Payload{}
+// decodeFragment decodes data by returning it all in a Fragment layer.
+func decodeFragment(data []byte, p PacketBuilder) error {
+	payload := &Fragment{}
 	if err := payload.DecodeFromBytes(data, p); err != nil {
 		return nil
 	}

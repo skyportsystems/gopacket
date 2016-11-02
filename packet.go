@@ -15,6 +15,7 @@ import (
 	"os"
 	"reflect"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,8 @@ type CaptureInfo struct {
 	// Length is the size of the original packet.  Should always be >=
 	// CaptureLength.
 	Length int
+	// InterfaceIndex
+	InterfaceIndex int
 }
 
 // PacketMetadata contains metadata for a packet.
@@ -107,6 +110,10 @@ type packet struct {
 	// metadata is the PacketMetadata for this packet
 	metadata PacketMetadata
 
+	// recoverPanics is true if we should recover from panics we see while
+	// decoding and set a DecodeFailure layer.
+	recoverPanics bool
+
 	// Pointers to the various important layers
 	link        LinkLayer
 	network     NetworkLayer
@@ -179,8 +186,10 @@ func (p *packet) addFinalDecodeError(err error, stack []byte) {
 }
 
 func (p *packet) recoverDecodeError() {
-	if r := recover(); r != nil {
-		p.addFinalDecodeError(fmt.Errorf("%v", r), debug.Stack())
+	if p.recoverPanics {
+		if r := recover(); r != nil {
+			p.addFinalDecodeError(fmt.Errorf("%v", r), debug.Stack())
+		}
 	}
 }
 
@@ -197,7 +206,7 @@ func (p *packet) recoverDecodeError() {
 // Payload layer and it's internal 'data' field, which contains a large byte
 // array that would really mess up formatting.
 func LayerString(l Layer) string {
-	return fmt.Sprintf("%v\t%s", l.LayerType(), layerString(l, false, false))
+	return fmt.Sprintf("%v\t%s", l.LayerType(), layerString(reflect.ValueOf(l), false, false))
 }
 
 // Dumper dumps verbose information on a value.  If a layer type implements
@@ -235,20 +244,21 @@ func LayerDump(l Layer) string {
 //   writeSpace:  if we've already written a value in a struct, and need to
 //     write a space before writing more.  This happens when we write various
 //     anonymous values, and need to keep writing more.
-func layerString(i interface{}, anonymous bool, writeSpace bool) string {
+func layerString(v reflect.Value, anonymous bool, writeSpace bool) string {
 	// Let String() functions take precedence.
-	if s, ok := i.(fmt.Stringer); ok {
-		return s.String()
+	if v.CanInterface() {
+		if s, ok := v.Interface().(fmt.Stringer); ok {
+			return s.String()
+		}
 	}
 	// Reflect, and spit out all the exported fields as key=value.
-	v := reflect.ValueOf(i)
 	switch v.Type().Kind() {
 	case reflect.Interface, reflect.Ptr:
 		if v.IsNil() {
 			return "nil"
 		}
 		r := v.Elem()
-		return layerString(r.Interface(), anonymous, writeSpace)
+		return layerString(r, anonymous, writeSpace)
 	case reflect.Struct:
 		var b bytes.Buffer
 		typ := v.Type()
@@ -260,7 +270,7 @@ func layerString(i interface{}, anonymous bool, writeSpace bool) string {
 			ftype := typ.Field(i)
 			f := v.Field(i)
 			if ftype.Anonymous {
-				anonStr := layerString(f.Interface(), true, writeSpace)
+				anonStr := layerString(f, true, writeSpace)
 				writeSpace = writeSpace || anonStr != ""
 				b.WriteString(anonStr)
 			} else if ftype.PkgPath == "" { // exported
@@ -268,7 +278,7 @@ func layerString(i interface{}, anonymous bool, writeSpace bool) string {
 					b.WriteByte(' ')
 				}
 				writeSpace = true
-				fmt.Fprintf(&b, "%s=%s", typ.Field(i).Name, layerString(f.Interface(), false, writeSpace))
+				fmt.Fprintf(&b, "%s=%s", typ.Field(i).Name, layerString(f, false, writeSpace))
 			}
 		}
 		if !anonymous {
@@ -285,13 +295,98 @@ func layerString(i interface{}, anonymous bool, writeSpace bool) string {
 				if j != 0 {
 					b.WriteString(", ")
 				}
-				b.WriteString(layerString(v.Index(j).Interface(), false, false))
+				b.WriteString(layerString(v.Index(j), false, false))
 			}
 		}
 		b.WriteByte(']')
 		return b.String()
 	}
 	return fmt.Sprintf("%v", v.Interface())
+}
+
+const (
+	longBytesLength = 128
+)
+
+// LongBytesGoString returns a string representation of the byte slice shortened
+// using the format '<type>{<truncated slice> ... (<n> bytes)}' if it
+// exceeds a predetermined length. Can be used to avoid filling the display with
+// very long byte strings.
+func LongBytesGoString(buf []byte) string {
+	if len(buf) < longBytesLength {
+		return fmt.Sprintf("%#v", buf)
+	}
+	s := fmt.Sprintf("%#v", buf[:longBytesLength-1])
+	s = strings.TrimSuffix(s, "}")
+	return fmt.Sprintf("%s ... (%d bytes)}", s, len(buf))
+}
+
+func baseLayerString(value reflect.Value) string {
+	t := value.Type()
+	content := value.Field(0)
+	c := make([]byte, content.Len())
+	for i := range c {
+		c[i] = byte(content.Index(i).Uint())
+	}
+	payload := value.Field(1)
+	p := make([]byte, payload.Len())
+	for i := range p {
+		p[i] = byte(payload.Index(i).Uint())
+	}
+	return fmt.Sprintf("%s{Contents:%s, Payload:%s}", t.String(),
+		LongBytesGoString(c),
+		LongBytesGoString(p))
+}
+
+func layerGoString(i interface{}, b *bytes.Buffer) {
+	if s, ok := i.(fmt.GoStringer); ok {
+		b.WriteString(s.GoString())
+		return
+	}
+
+	var v reflect.Value
+	var ok bool
+	if v, ok = i.(reflect.Value); !ok {
+		v = reflect.ValueOf(i)
+	}
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if v.Kind() == reflect.Ptr {
+			b.WriteByte('&')
+		}
+		layerGoString(v.Elem().Interface(), b)
+	case reflect.Struct:
+		t := v.Type()
+		b.WriteString(t.String())
+		b.WriteByte('{')
+		for i := 0; i < v.NumField(); i++ {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			if t.Field(i).Name == "BaseLayer" {
+				fmt.Fprintf(b, "BaseLayer:%s", baseLayerString(v.Field(i)))
+			} else if v.Field(i).Kind() == reflect.Struct {
+				fmt.Fprintf(b, "%s:", t.Field(i).Name)
+				layerGoString(v.Field(i), b)
+			} else if v.Field(i).Kind() == reflect.Ptr {
+				b.WriteByte('&')
+				layerGoString(v.Field(i), b)
+			} else {
+				fmt.Fprintf(b, "%s:%#v", t.Field(i).Name, v.Field(i))
+			}
+		}
+		b.WriteByte('}')
+	default:
+		fmt.Fprintf(b, "%#v", i)
+	}
+}
+
+// LayerGoString returns a representation of the layer in Go syntax,
+// taking care to shorten "very long" BaseLayer byte slices
+func LayerGoString(l Layer) string {
+	b := new(bytes.Buffer)
+	layerGoString(l, b)
+	return b.String()
 }
 
 func (p *packet) packetString() string {
@@ -329,11 +424,11 @@ type eagerPacket struct {
 	packet
 }
 
-var nilDecoderError = errors.New("NextDecoder passed nil decoder, probably an unsupported decode type")
+var errNilDecoder = errors.New("NextDecoder passed nil decoder, probably an unsupported decode type")
 
 func (p *eagerPacket) NextDecoder(next Decoder) error {
 	if next == nil {
-		return nilDecoderError
+		return errNilDecoder
 	}
 	if p.last == nil {
 		return errors.New("NextDecoder called, but no layers added yet")
@@ -400,7 +495,7 @@ type lazyPacket struct {
 
 func (p *lazyPacket) NextDecoder(next Decoder) error {
 	if next == nil {
-		return nilDecoderError
+		return errNilDecoder
 	}
 	p.next = next
 	return nil
@@ -514,6 +609,12 @@ type DecodeOptions struct {
 	// there's any chance that those bytes WILL be changed, this will invalidate
 	// your packets.
 	NoCopy bool
+	// SkipDecodeRecovery skips over panic recovery during packet decoding.
+	// Normally, when packets decode, if a panic occurs, that panic is captured
+	// by a recover(), and a DecodeFailure layer is added to the packet detailing
+	// the issue.  If this flag is set, panics are instead allowed to continue up
+	// the stack.
+	SkipDecodeRecovery bool
 }
 
 // Default decoding provides the safest (but slowest) method for decoding
@@ -523,13 +624,13 @@ type DecodeOptions struct {
 // though, so beware.  If you can guarantee that the packet will only be used
 // by one goroutine at a time, set Lazy decoding.  If you can guarantee that
 // the underlying slice won't change, set NoCopy decoding.
-var Default DecodeOptions = DecodeOptions{}
+var Default = DecodeOptions{}
 
 // Lazy is a DecodeOptions with just Lazy set.
-var Lazy DecodeOptions = DecodeOptions{Lazy: true}
+var Lazy = DecodeOptions{Lazy: true}
 
 // NoCopy is a DecodeOptions with just NoCopy set.
-var NoCopy DecodeOptions = DecodeOptions{NoCopy: true}
+var NoCopy = DecodeOptions{NoCopy: true}
 
 // NewPacket creates a new Packet object from a set of bytes.  The
 // firstLayerDecoder tells it how to interpret the first layer from the bytes,
@@ -546,6 +647,7 @@ func NewPacket(data []byte, firstLayerDecoder Decoder, options DecodeOptions) Pa
 			next:   firstLayerDecoder,
 		}
 		p.layers = p.initialLayers[:0]
+		p.recoverPanics = !options.SkipDecodeRecovery
 		// Crazy craziness:
 		// If the following return statemet is REMOVED, and Lazy is FALSE, then
 		// eager packet processing becomes 17% FASTER.  No, there is no logical
@@ -562,6 +664,7 @@ func NewPacket(data []byte, firstLayerDecoder Decoder, options DecodeOptions) Pa
 		packet: packet{data: data},
 	}
 	p.layers = p.initialLayers[:0]
+	p.recoverPanics = !options.SkipDecodeRecovery
 	p.initialDecode(firstLayerDecoder)
 	return p
 }
@@ -642,6 +745,7 @@ type PacketSource struct {
 	// of packet data.  This can/should be changed by the user to reflect the
 	// way packets should be decoded.
 	DecodeOptions
+	c chan Packet
 }
 
 // NewPacketSource creates a packet data source.
@@ -669,19 +773,19 @@ func (p *PacketSource) NextPacket() (Packet, error) {
 // packetsToChannel reads in all packets from the packet source and sends them
 // to the given channel.  When it receives an error, it ignores it.  When it
 // receives an io.EOF, it closes the channel.
-func (p *PacketSource) packetsToChannel(c chan<- Packet) {
-	defer close(c)
+func (p *PacketSource) packetsToChannel() {
+	defer close(p.c)
 	for {
 		packet, err := p.NextPacket()
 		if err == io.EOF {
 			return
 		} else if err == nil {
-			c <- packet
+			p.c <- packet
 		}
 	}
 }
 
-// Packets returns a blocking channel of packets, allowing easy iterating over
+// Packets returns a channel of packets, allowing easy iterating over
 // packets.  Packets will be asynchronously read in from the underlying
 // PacketDataSource and written to the returned channel.  If the underlying
 // PacketDataSource returns an io.EOF error, the channel will be closed.
@@ -690,8 +794,12 @@ func (p *PacketSource) packetsToChannel(c chan<- Packet) {
 //  for packet := range packetSource.Packets() {
 //    handlePacket(packet)  // Do something with each packet.
 //  }
+//
+// If called more than once, returns the same channel.
 func (p *PacketSource) Packets() chan Packet {
-	c := make(chan Packet, 1000)
-	go p.packetsToChannel(c)
-	return c
+	if p.c == nil {
+		p.c = make(chan Packet, 1000)
+		go p.packetsToChannel()
+	}
+	return p.c
 }

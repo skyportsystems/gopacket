@@ -18,6 +18,13 @@ type DecodeFeedback interface {
 	SetTruncated()
 }
 
+type nilDecodeFeedback struct{}
+
+func (nilDecodeFeedback) SetTruncated() {}
+
+// NilDecodeFeedback implements DecodeFeedback by doing nothing.
+var NilDecodeFeedback DecodeFeedback = nilDecodeFeedback{}
+
 // PacketBuilder is used by layer decoders to store the layers they've decoded,
 // and to defer future decoding via NextDecoder.
 // Typically, the pattern for use is:
@@ -72,6 +79,7 @@ type Decoder interface {
 // DecodeFunc wraps a function to make it a Decoder.
 type DecodeFunc func([]byte, PacketBuilder) error
 
+// Decode implements Decoder by calling itself.
 func (d DecodeFunc) Decode(data []byte, p PacketBuilder) error {
 	// function, call thyself.
 	return d(data, p)
@@ -86,16 +94,24 @@ var DecodePayload Decoder = DecodeFunc(decodePayload)
 // decode yet.  This layer is considered an ErrorLayer.
 var DecodeUnknown Decoder = DecodeFunc(decodeUnknown)
 
+// DecodeFragment is a Decoder that returns a Fragment layer containing all
+// remaining bytes.
+var DecodeFragment Decoder = DecodeFunc(decodeFragment)
+
 // LayerTypeZero is an invalid layer type, but can be used to determine whether
 // layer type has actually been set correctly.
-var LayerTypeZero LayerType = RegisterLayerType(0, LayerTypeMetadata{"Unknown", DecodeUnknown})
+var LayerTypeZero = RegisterLayerType(0, LayerTypeMetadata{Name: "Unknown", Decoder: DecodeUnknown})
 
 // LayerTypeDecodeFailure is the layer type for the default error layer.
-var LayerTypeDecodeFailure LayerType = RegisterLayerType(1, LayerTypeMetadata{"DecodeFailure", DecodeUnknown})
+var LayerTypeDecodeFailure = RegisterLayerType(1, LayerTypeMetadata{Name: "DecodeFailure", Decoder: DecodeUnknown})
 
 // LayerTypePayload is the layer type for a payload that we don't try to decode
 // but treat as a success, IE: an application-level payload.
-var LayerTypePayload LayerType = RegisterLayerType(2, LayerTypeMetadata{"Payload", DecodePayload})
+var LayerTypePayload = RegisterLayerType(2, LayerTypeMetadata{Name: "Payload", Decoder: DecodePayload})
+
+// LayerTypeFragment is the layer type for a fragment of a layer transported
+// by an underlying layer that supports fragmentation.
+var LayerTypeFragment = RegisterLayerType(3, LayerTypeMetadata{Name: "Fragment", Decoder: DecodeFragment})
 
 // DecodeFailure is a packet layer created if decoding of the packet data failed
 // for some reason.  It implements ErrorLayer.  LayerContents will be the entire
@@ -108,12 +124,20 @@ type DecodeFailure struct {
 }
 
 // Error returns the error encountered during decoding.
-func (d *DecodeFailure) Error() error          { return d.err }
+func (d *DecodeFailure) Error() error { return d.err }
+
+// LayerContents implements Layer.
 func (d *DecodeFailure) LayerContents() []byte { return d.data }
-func (d *DecodeFailure) LayerPayload() []byte  { return nil }
+
+// LayerPayload implements Layer.
+func (d *DecodeFailure) LayerPayload() []byte { return nil }
+
+// String implements fmt.Stringer.
 func (d *DecodeFailure) String() string {
 	return "Packet decoding error: " + d.Error().Error()
 }
+
+// Dump implements Dumper.
 func (d *DecodeFailure) Dump() (s string) {
 	if d.stack != nil {
 		s = string(d.stack)

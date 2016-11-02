@@ -11,7 +11,7 @@
 package main
 
 import (
-	"code.google.com/p/gopacket/pcap"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/google/gopacket/pcap"
 )
 
 var mode = flag.String("mode", "basic", "One of: basic,filtered,timestamp")
@@ -51,7 +53,7 @@ func main() {
 
 func tryCapture(iface net.Interface) error {
 	if iface.Name[:2] == "lo" {
-		return fmt.Errorf("skipping loopback")
+		return errors.New("skipping loopback")
 	}
 	var h *pcap.Handle
 	var err error
@@ -86,7 +88,7 @@ func tryCapture(iface net.Interface) error {
 		}
 		sources := u.SupportedTimestamps()
 		if len(sources) == 0 {
-			return fmt.Errorf("no supported timestamp sources")
+			return errors.New("no supported timestamp sources")
 		} else if err := u.SetTimestampSource(sources[0]); err != nil {
 			return fmt.Errorf("settimestampsource(%v): %v", sources[0], err)
 		} else if h, err = u.Activate(); err != nil {

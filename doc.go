@@ -39,7 +39,7 @@ can be requested from the packet.
    fmt.Printf("From src port %d to dst port %d\n", tcp.SrcPort, tcp.DstPort)
  }
  // Iterate over all layers, printing out each layer type
- for layer := range packet.Layers() {
+ for _, layer := range packet.Layers() {
    fmt.Println("PACKET LAYER:", layer.LayerType())
  }
 
@@ -292,9 +292,9 @@ the packet's information.  A quick example:
      for _, layerType := range decoded {
        switch layerType {
          case layers.LayerTypeIPv6:
-           fmt.Println("    IP4 ", ip4.SrcIP, ip4.DstIP)
-         case layers.LayerTypeIPv4:
            fmt.Println("    IP6 ", ip6.SrcIP, ip6.DstIP)
+         case layers.LayerTypeIPv4:
+           fmt.Println("    IP4 ", ip4.SrcIP, ip4.DstIP)
        }
      }
    }
@@ -340,7 +340,7 @@ reverse order (Payload, then TCP, then IP, then Ethernet, for example).  The
 SerializeBuffer's SerializeLayers function is a helper that does exactly that.
 
 To generate a (empty and useless, because no fields are set)
-Ethernet(IPv4(TCP(Payload))) packet, for exmaple, you can run:
+Ethernet(IPv4(TCP(Payload))) packet, for example, you can run:
 
   buf := gopacket.NewSerializeBuffer()
   opts := gopacket.SerializeOptions{}
@@ -359,7 +359,7 @@ in a lot of interesting variables/maps (DecodersByLayerName, etc).  Therefore,
 it's recommended that even if you don't use any layers functions directly, you still import with:
 
   import (
-    _ "code.google.com/p/gopacket/layers"
+    _ "github.com/google/gopacket/layers"
   )
 */
 package gopacket

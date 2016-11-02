@@ -19,16 +19,17 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"time"
 
-	"code.google.com/p/gopacket"
-	"code.google.com/p/gopacket/layers"
-	"code.google.com/p/gopacket/pcap"
-	"code.google.com/p/gopacket/routing"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/examples/util"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
+	"github.com/google/gopacket/routing"
 )
 
 // scanner handles scanning a single IP address.
@@ -118,7 +119,7 @@ func (s *scanner) getHwAddr() (net.HardwareAddr, error) {
 	// Wait 3 seconds for an ARP reply.
 	for {
 		if time.Since(start) > time.Second*3 {
-			return nil, fmt.Errorf("timeout getting ARP reply")
+			return nil, errors.New("timeout getting ARP reply")
 		}
 		data, _, err := s.handle.ReadPacketData()
 		if err == pcap.NextErrorTimeoutExpired {
@@ -229,7 +230,7 @@ func (s *scanner) send(l ...gopacket.SerializableLayer) error {
 }
 
 func main() {
-	flag.Parse()
+	defer util.Run()()
 	router, err := routing.New()
 	if err != nil {
 		log.Fatal("routing error:", err)

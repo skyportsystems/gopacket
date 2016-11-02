@@ -9,10 +9,11 @@
 package main
 
 import (
-	"code.google.com/p/gopacket/dumpcommand"
-	"code.google.com/p/gopacket/pcap"
 	"flag"
 	"fmt"
+	"github.com/google/gopacket/dumpcommand"
+	"github.com/google/gopacket/examples/util"
+	"github.com/google/gopacket/pcap"
 	"log"
 	"os"
 	"strings"
@@ -26,7 +27,7 @@ var tstype = flag.String("timestamp_type", "", "Type of timestamps to use")
 var promisc = flag.Bool("promisc", true, "Set promiscuous mode")
 
 func main() {
-	flag.Parse()
+	defer util.Run()()
 	var handle *pcap.Handle
 	var err error
 	if *fname != "" {
@@ -39,15 +40,15 @@ func main() {
 		// just call pcap.OpenLive if you want a simple handle.
 		inactive, err := pcap.NewInactiveHandle(*iface)
 		if err != nil {
-			log.Fatal("could not create: %v", err)
+			log.Fatalf("could not create: %v", err)
 		}
 		defer inactive.CleanUp()
 		if err = inactive.SetSnapLen(*snaplen); err != nil {
-			log.Fatal("could not set snap length: %v", err)
+			log.Fatalf("could not set snap length: %v", err)
 		} else if err = inactive.SetPromisc(*promisc); err != nil {
-			log.Fatal("could not set promisc mode: %v", err)
+			log.Fatalf("could not set promisc mode: %v", err)
 		} else if err = inactive.SetTimeout(time.Second); err != nil {
-			log.Fatal("could not set timeout: %v", err)
+			log.Fatalf("could not set timeout: %v", err)
 		}
 		if *tstype != "" {
 			if t, err := pcap.TimestampSourceFromString(*tstype); err != nil {

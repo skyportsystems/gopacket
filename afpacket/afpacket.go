@@ -14,7 +14,6 @@ package afpacket
 // http://codemonkeytips.blogspot.co.uk/2011/07/asynchronous-packet-socket-reading-with.html
 
 import (
-	"code.google.com/p/gopacket"
 	"errors"
 	"fmt"
 	"net"
@@ -22,6 +21,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/google/gopacket"
 )
 
 /*
@@ -52,6 +53,13 @@ type Stats struct {
 	Polls int64
 }
 
+// SocketStats is a struct where socket stats are stored
+type SocketStats C.struct_tpacket_stats
+
+// SocketStatsV3 is a struct where socket stats for TPacketV3 are stored
+type SocketStatsV3 C.struct_tpacket_stats_v3
+
+// TPacket implements packet receiving for Linux AF_PACKET versions 1, 2, and 3.
 type TPacket struct {
 	// fd is the C file descriptor.
 	fd C.int
@@ -70,6 +78,10 @@ type TPacket struct {
 	shouldReleasePacket bool
 	// stats is simple statistics on TPacket's run.
 	stats Stats
+	// socketStats contains stats from the socket
+	socketStats SocketStats
+	// same as socketStats, but with an extra field freeze_q_cnt
+	socketStatsV3 SocketStatsV3
 	// tpVersion is the version of TPacket actually in use, set by setRequestedTPacketVersion.
 	tpVersion OptTPacketVersion
 	// Hackity hack hack hack.  We need to return a pointer to the header with
@@ -80,14 +92,20 @@ type TPacket struct {
 
 // bindToInterface binds the TPacket socket to a particular named interface.
 func (h *TPacket) bindToInterface(ifaceName string) error {
-	iface, err := net.InterfaceByName(ifaceName)
-	if err != nil {
-		return fmt.Errorf("InterfaceByName: %v", err)
+	ifIndex := 0
+	// An empty string here means to listen to all interfaces
+	if ifaceName != "" {
+		iface, err := net.InterfaceByName(ifaceName)
+		if err != nil {
+			return fmt.Errorf("InterfaceByName: %v", err)
+		}
+		ifIndex = iface.Index
 	}
+
 	var ll C.struct_sockaddr_ll
 	ll.sll_family = C.AF_PACKET
 	ll.sll_protocol = C.__be16(C.htons(C.ETH_P_ALL))
-	ll.sll_ifindex = C.int(iface.Index)
+	ll.sll_ifindex = C.int(ifIndex)
 	if _, err := C.bind(h.fd, (*C.struct_sockaddr)(unsafe.Pointer(&ll)), C.socklen_t(unsafe.Sizeof(ll))); err != nil {
 		return fmt.Errorf("bindToInterface: %v", err)
 	}
@@ -183,15 +201,17 @@ func NewTPacket(opts ...interface{}) (h *TPacket, err error) {
 		return nil, err
 	}
 	h.fd = fd
-	if h.opts.iface != "" {
-		if err = h.bindToInterface(h.opts.iface); err != nil {
-			goto errlbl
-		}
+	if err = h.bindToInterface(h.opts.iface); err != nil {
+		goto errlbl
 	}
 	if err = h.setRequestedTPacketVersion(); err != nil {
 		goto errlbl
 	}
 	if err = h.setUpRing(); err != nil {
+		goto errlbl
+	}
+	// Clear stat counter from socket
+	if err = h.InitSocketStats(); err != nil {
 		goto errlbl
 	}
 	runtime.SetFinalizer(h, (*TPacket).Close)
@@ -235,6 +255,7 @@ func (h *TPacket) ZeroCopyReadPacketData() (data []byte, ci gopacket.CaptureInfo
 	ci.Timestamp = h.current.getTime()
 	ci.CaptureLength = len(data)
 	ci.Length = h.current.getLength()
+	ci.InterfaceIndex = h.current.getIfaceIndex()
 	h.stats.Packets++
 	h.mu.Unlock()
 	return
@@ -245,6 +266,66 @@ func (h *TPacket) Stats() (Stats, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.stats, nil
+}
+
+// InitSocketStats clears socket counters and return empty stats.
+func (h *TPacket) InitSocketStats() error {
+	if h.tpVersion == TPacketVersion3 {
+		socklen := unsafe.Sizeof(h.socketStatsV3)
+		slt := C.socklen_t(socklen)
+		var ssv3 SocketStatsV3
+
+		_, err := C.getsockopt(h.fd, C.SOL_PACKET, C.PACKET_STATISTICS, unsafe.Pointer(&ssv3), &slt)
+		if err != nil {
+			return err
+		}
+		h.socketStatsV3 = SocketStatsV3{}
+	} else {
+		socklen := unsafe.Sizeof(h.socketStats)
+		slt := C.socklen_t(socklen)
+		var ss SocketStats
+
+		_, err := C.getsockopt(h.fd, C.SOL_PACKET, C.PACKET_STATISTICS, unsafe.Pointer(&ss), &slt)
+		if err != nil {
+			return err
+		}
+		h.socketStats = SocketStats{}
+	}
+	return nil
+}
+
+// SocketStats saves stats from the socket to the TPacket instance.
+func (h *TPacket) SocketStats() (SocketStats, SocketStatsV3, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// We need to save the counters since asking for the stats will clear them
+	if h.tpVersion == TPacketVersion3 {
+		socklen := unsafe.Sizeof(h.socketStatsV3)
+		slt := C.socklen_t(socklen)
+		var ssv3 SocketStatsV3
+
+		_, err := C.getsockopt(h.fd, C.SOL_PACKET, C.PACKET_STATISTICS, unsafe.Pointer(&ssv3), &slt)
+		if err != nil {
+			return SocketStats{}, SocketStatsV3{}, err
+		}
+
+		h.socketStatsV3.tp_packets += ssv3.tp_packets
+		h.socketStatsV3.tp_drops += ssv3.tp_drops
+		h.socketStatsV3.tp_freeze_q_cnt += ssv3.tp_freeze_q_cnt
+		return h.socketStats, h.socketStatsV3, nil
+	}
+	socklen := unsafe.Sizeof(h.socketStats)
+	slt := C.socklen_t(socklen)
+	var ss SocketStats
+
+	_, err := C.getsockopt(h.fd, C.SOL_PACKET, C.PACKET_STATISTICS, unsafe.Pointer(&ss), &slt)
+	if err != nil {
+		return SocketStats{}, SocketStatsV3{}, err
+	}
+
+	h.socketStats.tp_packets += ss.tp_packets
+	h.socketStats.tp_drops += ss.tp_drops
+	return h.socketStats, h.socketStatsV3, nil
 }
 
 // ReadPacketDataTo reads packet data into a user-supplied buffer.
@@ -309,6 +390,9 @@ func (h *TPacket) pollForFirstPacket(hdr header) error {
 		h.pollset.revents = 0
 		_, err := C.poll(&h.pollset, 1, -1)
 		h.stats.Polls++
+		if h.pollset.revents&C.POLLERR > 0 {
+			return errors.New("poll error condition")
+		}
 		if err != nil {
 			return err
 		}
@@ -320,6 +404,7 @@ func (h *TPacket) pollForFirstPacket(hdr header) error {
 // FanoutType determines the type of fanout to use with a TPacket SetFanout call.
 type FanoutType int
 
+// FanoutType values.
 const (
 	FanoutHash FanoutType = 0
 	// It appears that defrag only works with FanoutHash, see:
@@ -341,5 +426,11 @@ func (h *TPacket) SetFanout(t FanoutType, id uint16) error {
 	arg := C.int(t) << 16
 	arg |= C.int(id)
 	_, err := C.setsockopt(h.fd, C.SOL_PACKET, C.PACKET_FANOUT, unsafe.Pointer(&arg), C.socklen_t(unsafe.Sizeof(arg)))
+	return err
+}
+
+// WritePacketData transmits a raw packet.
+func (h *TPacket) WritePacketData(pkt []byte) error {
+	_, err := C.write(h.fd, unsafe.Pointer(&pkt[0]), C.size_t(len(pkt)))
 	return err
 }

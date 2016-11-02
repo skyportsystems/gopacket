@@ -14,15 +14,15 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"log"
 	"net"
 	"sync"
 	"time"
 
-	"code.google.com/p/gopacket"
-	"code.google.com/p/gopacket/layers"
-	"code.google.com/p/gopacket/pcap"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
 )
 
 func main() {
@@ -73,11 +73,11 @@ func scan(iface *net.Interface) error {
 	}
 	// Sanity-check that the interface has a good address.
 	if addr == nil {
-		return fmt.Errorf("no good IP network found")
+		return errors.New("no good IP network found")
 	} else if addr.IP[0] == 127 {
-		return fmt.Errorf("skipping localhost")
+		return errors.New("skipping localhost")
 	} else if addr.Mask[0] != 0xff || addr.Mask[1] != 0xff {
-		return fmt.Errorf("mask means network is too large")
+		return errors.New("mask means network is too large")
 	}
 	log.Printf("Using network range %v for interface %v", addr, iface.Name)
 

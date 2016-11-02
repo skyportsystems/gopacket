@@ -4,14 +4,14 @@
 // that can be found in the LICENSE file in the root of the source
 // tree.
 
-/* Package pfring wraps the PF_RING C library for Go.
+/*Package pfring wraps the PF_RING C library for Go.
 
 PF_RING is a high-performance packet capture library written by ntop.org (see
 http://www.ntop.org/products/pf_ring/).  This library allows you to utilize the
 PF_RING library with gopacket to read packet data and decode it.
 
 This package is meant to be used with its parent,
-http://code.google.com/p/gopacket, although it can also be used independently
+http://github.com/google/gopacket, although it can also be used independently
 if you just want to get packet data from the wire.
 
 Simple Example

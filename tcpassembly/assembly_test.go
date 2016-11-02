@@ -7,8 +7,8 @@
 package tcpassembly
 
 import (
-	"code.google.com/p/gopacket"
-	"code.google.com/p/gopacket/layers"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"net"
 	"reflect"
 	"testing"
@@ -554,7 +554,7 @@ func BenchmarkMultiStreamConn(b *testing.B) {
 		if i%65536 == 65535 {
 			if t.SYN {
 				t.SYN = false
-				t.Seq += 1
+				t.Seq++
 			}
 			t.Seq += 10
 		}

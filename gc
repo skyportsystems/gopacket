@@ -20,7 +20,7 @@
 
 function Usage {
   cat <<EOF
-USAGE:  $0 [--benchmark] [--root] [--gen] <git commit flags...>
+USAGE:  $0 [--benchmark regexp] [--root] [--gen] <git commit flags...>
 
 --benchmark:  Run benchmark comparisons against last benchmark'd commit
 --root:  Run tests that require root priviledges
@@ -37,7 +37,8 @@ ROOT=""
 while [ ! -z "$1" ]; do
   case "$1" in
     "--benchmark")
-      BENCH="yes"
+      BENCH="$2"
+      shift
       shift
       ;;
     "--gen")
@@ -112,59 +113,59 @@ fi
 go fmt ./...
 go test -i ./... 2>/dev/null >/dev/null || true
 go test
-go build -race
+go build
 pushd examples/bytediff
 go build
 popd
 if [ -f /usr/include/pcap.h ]; then
   pushd pcap
   go test ./...
-  go build -race ./...
-  go build -race pcap_tester.go
+  go build ./...
+  go build pcap_tester.go
   Root pcap_tester --mode=basic
   Root pcap_tester --mode=filtered
   Root pcap_tester --mode=timestamp || echo "You might not support timestamp sources"
   popd
   pushd examples/pcapdump
-  go build -race
+  go build
   popd
   pushd examples/arpscan
-  go build -race
+  go build
   popd
   pushd examples/bidirectional
-  go build -race
+  go build
   popd
   pushd examples/synscan
-  go build -race
+  go build
   popd
   pushd examples/httpassembly
-  go build -race
+  go build
   popd
   pushd examples/statsassembly
-  go build -race
+  go build
   popd
 fi
 pushd macs
 go test ./...
 gofmt -w gen.go
-go build -race gen.go
+go build gen.go
 popd
 pushd tcpassembly
 go test ./...
 popd
 pushd layers
 gofmt -w gen.go
-go build -race gen.go
+go build gen.go
 go test ./...
 popd
 pushd pcapgo
 go test ./...
-go build -race ./...
+go build ./...
 popd
 if [ -f /usr/include/linux/if_packet.h ]; then
   if grep -q TPACKET_V3 /usr/include/linux/if_packet.h; then
     pushd afpacket
-    go build -race ./...
+    go build ./...
     go test ./...
     popd
   fi
@@ -172,12 +173,16 @@ fi
 if [ -f /usr/include/pfring.h ]; then
   pushd pfring
   go test ./...
-  go build -race ./...
+  go build ./...
   popd
   pushd examples/pfdump
-  go build -race
+  go build
   popd
 fi
+
+for travis_script in `ls .travis.*.sh`; do
+  ./$travis_script
+done
 
 # Run our initial commit
 git commit "$@"
@@ -218,19 +223,21 @@ BENCHMARK_MARKER_DO_NOT_CHANGE
 Go version $(go version)
 
 
-TEST BENCHMARKS
+TEST BENCHMARKS "$BENCH"
 EOF
 # go seems to have trouble with 'go test --bench=. ./...'
-go test --test.bench=.* 2>&1 | tee -a $COMMIT_FILE
+go test --test.bench="$BENCH" 2>&1 | tee -a $COMMIT_FILE
 pushd layers
-go test --test.bench=.* 2>&1 | tee -a $COMMIT_FILE
+go test --test.bench="$BENCH" 2>&1 | tee -a $COMMIT_FILE
 popd
 cat >> $COMMIT_FILE <<EOF
 
 
 PCAP BENCHMARK
 EOF
-go run pcap/gopacket_benchmark/*.go 2>&1 | tee -a $COMMIT_FILE
+if [ "$BENCH" -eq ".*" ]; then
+  go run pcap/gopacket_benchmark/*.go 2>&1 | tee -a $COMMIT_FILE
+fi
 
 
 
@@ -247,16 +254,18 @@ BENCHMARKING AGAINST COMMIT $PREV
 OLD TEST BENCHMARKS
 EOF
 # go seems to have trouble with 'go test --bench=. ./...'
-go test --test.bench=.* 2>&1 | tee -a $COMMIT_FILE
+go test --test.bench="$BENCH" 2>&1 | tee -a $COMMIT_FILE
 pushd layers
-go test --test.bench=.* 2>&1 | tee -a $COMMIT_FILE
+go test --test.bench="$BENCH" 2>&1 | tee -a $COMMIT_FILE
 popd
 cat >> $COMMIT_FILE <<EOF
 
 
 OLD PCAP BENCHMARK
 EOF
-go run pcap/gopacket_benchmark/*.go 2>&1 | tee -a $COMMIT_FILE
+if [ "$BENCH" -eq ".*" ]; then
+  go run pcap/gopacket_benchmark/*.go 2>&1 | tee -a $COMMIT_FILE
+fi
 
 
 

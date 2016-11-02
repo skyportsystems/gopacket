@@ -11,19 +11,22 @@ package main
 
 import (
 	"bufio"
-	"code.google.com/p/gopacket"
-	"code.google.com/p/gopacket/layers"
-	"code.google.com/p/gopacket/pcap"
-	"code.google.com/p/gopacket/tcpassembly"
-	"code.google.com/p/gopacket/tcpassembly/tcpreader"
 	"flag"
 	"io"
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/examples/util"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
+	"github.com/google/gopacket/tcpassembly"
+	"github.com/google/gopacket/tcpassembly/tcpreader"
 )
 
 var iface = flag.String("i", "eth0", "Interface to get packets from")
+var fname = flag.String("r", "", "Filename to read from, overrides -i")
 var snaplen = flag.Int("s", 1600, "SnapLen for pcap packet capture")
 var filter = flag.String("f", "tcp and dst port 80", "BPF filter for pcap")
 var logAllPackets = flag.Bool("v", false, "Logs every packet in great detail")
@@ -69,15 +72,24 @@ func (h *httpStream) run() {
 }
 
 func main() {
-	flag.Parse()
-	log.Printf("starting capture on interface %q", *iface)
+	defer util.Run()()
+	var handle *pcap.Handle
+	var err error
+
 	// Set up pcap packet capture
-	handle, err := pcap.OpenLive(*iface, int32(*snaplen), true, pcap.BlockForever)
-	if err != nil {
-		panic(err)
+	if *fname != "" {
+		log.Printf("Reading from pcap dump %q", *fname)
+		handle, err = pcap.OpenOffline(*fname)
+	} else {
+		log.Printf("Starting capture on interface %q", *iface)
+		handle, err = pcap.OpenLive(*iface, int32(*snaplen), true, pcap.BlockForever)
 	}
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if err := handle.SetBPFFilter(*filter); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Set up assembly
@@ -93,6 +105,10 @@ func main() {
 	for {
 		select {
 		case packet := <-packets:
+			// A nil packet indicates the end of a pcap file.
+			if packet == nil {
+				return
+			}
 			if *logAllPackets {
 				log.Println(packet)
 			}
